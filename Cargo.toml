@@ -1,0 +1,18 @@
+[package]
+name = "graph_mcc"
+version = "0.1.0"
+edition = "2021"
+authors = ["Patrick Kothbauer <pkothbauer@gmail.com>"]
+
+
+[dependencies]
+
+
+[dependencies.uuid]
+version = "1.4.1"
+features = [
+    "v4",                # UUID based on random and monotonic clock.
+    "v7",                # UUID based on UNIX timestamp.
+    "fast-rng",          # Use a faster (but still sufficiently random) RNG.
+    "macro-diagnostics", # Enable better diagnostics for compile-time UUIDs.
+]

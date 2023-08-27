@@ -1,0 +1,1 @@
+A small transactional graph structure that adheres to MCC pattern.
