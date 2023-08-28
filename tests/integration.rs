@@ -5,8 +5,8 @@ fn test_case_01() {
     // "Test case 01: Add 2 nodes connected by an edge and follow that node"
     let mut g = Graph::new();  
     let t: TransactionId = g.start_transaction();
-    let n1: NodeId = g.add_node(&t);
-    let n2: NodeId = g.add_node(&t);
+    let n1: Node = g.add_node(&t);
+    let n2: Node = g.add_node(&t);
     g.add_edge(&t, &n1, &n2, "red".to_string());
     
     // We match the result of g.get_nodes against the Unique Universal Identifier.
