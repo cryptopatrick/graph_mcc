@@ -2,18 +2,12 @@
 #![allow(unused_variables)]
 #![allow(non_snake_case)]
 
-////////////////////////////////////////////////////////////////////////////////
-// Imports
 use uuid::Uuid;
 use std::collections::BTreeSet;
 use std::collections::BTreeMap;
 use std::collections::VecDeque;
 use std::collections::{HashMap, HashSet};
 use std::hash::Hash;
-
-////////////////////////////////////////////////////////////////////////////////
-// Graph Abstract Data Type Starts Here
-
 
 #[derive(Debug, Clone, Eq, PartialEq, Hash)]
 pub struct EdgeId {
@@ -28,14 +22,11 @@ impl EdgeId {
         }
     }
 
-    // UUID identiers can get pretty verbose to weidld.
-    // the alias function returns a truncated version of the eight first characters. 
     pub fn alias(&self) -> String {
         self.id.clone().chars().take(8).collect()
     }
 }
 
-/// A NodeId represents a unique identifier that refers to a node element in the graph.
 #[derive(Debug, Clone, Eq, PartialEq, Hash)]
 pub struct NodeId {
     pub id: String
@@ -51,20 +42,15 @@ impl NodeId {
         &self.id
     }
 
-    // UUID identiers can get pretty verbose to weild.
-    // The alias function returns a truncated version of the eight first characters. 
     pub fn alias(&self) -> String {
         self.id.clone().chars().take(8).collect()
     }
 }
 
-/// The graph is represented as an adjacency list.
 #[derive(Debug, Clone)]
 pub struct Graph {
-    // Graph related fields.
     nodes: HashMap<NodeId, HashSet<EdgeId>>,
     adjacencylist: HashMap<NodeId, Vec<(NodeId, EdgeId)>>,
-    // MCC related fields.
     next_xid: u32,
     active_xids: BTreeSet<u32>,
     modifications: BTreeSet<BTreeMap<String, u32>>,
@@ -82,9 +68,7 @@ impl Graph {
     }
 }    
 
-
 impl Graph {
-    // TODO: handle case where the passed TransactionId is Void.
     pub fn add_node(&mut self, t: &TransactionId) -> NodeId {
         let minted_node_id = NodeId::new();
         let node_id = minted_node_id.clone();
@@ -169,9 +153,6 @@ impl<'graph> Iterator for TypePath<'graph> {
 }
 
 
-
-////////////////////////////////////////////////////////////////////////////////
-// MVCC Start
 #[derive(Debug, Clone)]
 pub struct TransactionId {
     pub xid:u32,
@@ -259,9 +240,11 @@ impl TransactionId {
     fn rollback(&mut self, g: &mut Graph) {
         for action in self.rollback_actions.iter().rev() {
             let mut map = action.iter();
-            let (action_type, action_position) = map.next().unwrap().first();
-            let pos:u32 = action_position;
 
+            let item = map.next().unwrap();
+            let (action_type, action_position) = item.first().unwrap();            
+            let pos:u32 = action_position;
+            
             if action_type == &"add".to_string() {
                 g.set_tx_expiration_value(pos, 0);
             } else if action_type == &"delete".to_string() {
@@ -275,25 +258,69 @@ impl TransactionId {
  
 
 
-////////////////////////////////////////////////////////////////////////////////
-// Unit Tests Start
 #[cfg(test)]
-mod tests {
+mod unit_tests {
     use super::*;
 
     #[test]
-    fn test_case_01() {
-        // "Test case 01: Add 2 nodes connected by an edge and follow that node"
-        let mut g = Graph::new();  
-        let t: TransactionId = g.start_transaction();
-        let n1: NodeId = g.add_node(&t);
-        let n2: NodeId = g.add_node(&t);
-        g.add_edge(&t, &n1, &n2, "red".to_string());
-        
-        // We match the result of g.get_nodes against the Unique Universal Identifier.
-        assert_eq!(n2.alias(), g.get_nodes(&t, &n1, vec!(String::from("red"))).first().unwrap().alias());
-        assert_eq!(0, g.get_nodes(&t, &n1, vec!(String::from("blue"))).len());
-        assert_eq!(n1.alias(), g.get_nodes(&t, &n2, vec!(String::from("red"))).first().unwrap().alias());
-        assert_eq!(0, g.get_nodes(&t, &n2, vec!(String::from("blue"))).len());
+    fn test_add_node() {
+        let mut graph = Graph::new();
+        let tx = graph.start_transaction();
+        let node_id = graph.add_node(&tx);
+
+        assert!(graph.nodes.contains_key(&node_id));
+    }
+
+    #[test]
+    fn test_add_edge() {
+        let mut graph = Graph::new();
+        let tx = graph.start_transaction();
+        let node1 = graph.add_node(&tx);
+        let node2 = graph.add_node(&tx);
+
+        graph.add_edge(&tx, &node1, &node2, "edge_type".to_string());
+
+        let adjacency_list = graph.adjacencylist.get(&node1).unwrap();
+        assert_eq!(adjacency_list.len(), 1);
+        assert_eq!(adjacency_list[0].0, node2);
+    }
+
+    #[test]
+    fn test_get_nodes() {
+        let mut graph = Graph::new();
+        let tx = graph.start_transaction();
+        let node1 = graph.add_node(&tx);
+        let node2 = graph.add_node(&tx);
+        graph.add_edge(&tx, &node1, &node2, "edge_type".to_string());
+
+        let search_path = vec!["edge_type".to_string()];
+        let nodes = graph.get_nodes(&tx, &node1, search_path);
+
+        assert_eq!(nodes.len(), 1);
+        assert_eq!(nodes[0], node2);
+    }
+
+    #[test]
+    fn test_transaction_commit() {
+        let mut graph = Graph::new();
+        let tx = graph.start_transaction();
+
+        tx.commit(&mut graph);
+
+        assert!(!graph.active_xids.contains(&tx.xid));
+    }
+
+    #[test]
+    fn test_transaction_rollback() {
+        let mut graph = Graph::new();
+        let mut tx = graph.start_transaction();
+        let node1 = graph.add_node(&tx);
+        let mut modification = BTreeMap::new();
+        modification.insert("id".to_string(), 1);
+
+        tx.add_modification(&mut graph, &mut modification);
+        tx.rollback(&mut graph);
+
+        assert_eq!(graph.modifications.len(), 0);
     }
 }
