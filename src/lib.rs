@@ -9,6 +9,7 @@ use std::collections::VecDeque;
 use std::collections::{HashMap, HashSet};
 use std::hash::Hash;
 
+
 #[derive(Debug, Clone, Eq, PartialEq, Hash)]
 pub struct Edge {
     pub id: String,
@@ -41,19 +42,21 @@ impl Node {
     fn get(&self) -> &String {
         &self.id
     }
-
+    
     pub fn alias(&self) -> String {
         self.id.clone().chars().take(8).collect()
     }
 }
 
+////////////////////////////////////////////////////////////////////////////////
+// Graph
 #[derive(Debug, Clone)]
 pub struct Graph {
     nodes: HashMap<Node, HashSet<Edge>>,
     adjacencylist: HashMap<Node, Vec<(Node, Edge)>>,
     next_transaction_id: u32,
     active_transaction_ids: BTreeSet<u32>,
-    modifications: BTreeSet<BTreeMap<String, u32>>,
+    modifications: BTreeSet<BTreeMap<MCC, u32>>,
 }
 
 impl Graph {
@@ -89,7 +92,7 @@ impl Graph {
             .entry(from.clone()).or_default();
         src_edge_dst.push((to.clone(), edge));
     }
-
+    
     pub fn get_nodes(&self, t: &TransactionId, origin: &Node, search_path: Vec<String>) -> Vec<Node> {
         let type_path = TypePath { 
             graph: self, 
@@ -113,9 +116,9 @@ impl Graph {
     // FIX: Error mutating a borrow.
     pub fn set_transaction_expiration(&mut self, pos: u32, n:u32) {
         self.modifications.iter().skip(pos as usize - 1)
-            .next()
+            .next().to_owned()
             .unwrap()
-            .insert("expired".to_string(), n);
+            .insert(MCC::TransactionExpired, n);
     } 
     
 }
@@ -126,11 +129,11 @@ impl Default for Graph {
     }
 }
 
-/// TypePath represents a traversal of the graph based on the sequence of types 
-/// leading from a starting node, through all adjancent nodes connected via edges
-/// matching the sequence of types in the type path.
-// TODO: write an example of using TypePath.
 pub struct TypePath<'graph> {
+    /// TypePath represents a traversal of the graph based on the sequence of types 
+    /// leading from a starting node, through all adjancent nodes connected via edges
+    /// matching the sequence of types in the type path.
+    // TODO: write an example of using TypePath.
     graph: &'graph Graph,
     current_node: Option<Node>,
     // TODO: Improve naming of type_list and path_list variables.
@@ -144,13 +147,13 @@ impl<'graph> Iterator for TypePath<'graph> {
     fn next(&mut self) -> Option<Node> {
         if let Some(node) = self.current_node.take() {
             let edge_list = self.graph.adjacencylist.get(&node)?;
-
+            
             if let Some(current_type) = self.type_list.pop() { // .unwrap()
-                if let Some((ni,ei)) = edge_list.iter().next() {
-                    if ei.edgetype == current_type {
-                        self.path_list.push_back(ni.clone());
-                        self.current_node = Some(ni.clone());
-                        return Some(ni.clone());
+                if let Some((node,edge)) = edge_list.iter().next() {
+                    if edge.edgetype == current_type {
+                        self.path_list.push_back(node.clone());
+                        self.current_node = Some(node.clone());
+                        return Some(node.clone());
                     }
                 }
             }
@@ -162,10 +165,22 @@ impl<'graph> Iterator for TypePath<'graph> {
 }
 
 
+////////////////////////////////////////////////////////////////////////////////
+// MCC Transaction
+#[derive(Debug, Ord, Eq, PartialEq, PartialOrd, Clone)]
+enum MCC {
+    TransactionCreationId, 
+    TransactionExpirationId, 
+    TransactionExpired, 
+    AddElementToTransaction, 
+    DeleteElementFromTransaction, 
+    ElementId,
+}
+
 #[derive(Debug, Clone)]
 pub struct TransactionId {
     pub id:u32,
-    rollback_actions: BTreeSet<BTreeMap<String, u32>>,
+    rollback_actions: BTreeSet<BTreeMap<MCC, u32>>,
 }
 
 impl TransactionId {
@@ -176,12 +191,12 @@ impl TransactionId {
         }
     }
     
-    pub fn add_modification(&mut self, graph: &mut Graph, modification: &mut BTreeMap<String, u32>) {
-        modification.insert("transaction_creation_id".to_string(), self.id);
-        modification.insert("transaction_expiration_id".to_string(), 0);
+    pub fn add_modification(&mut self, graph: &mut Graph, modification: &mut BTreeMap<MCC, u32>) {
+        modification.insert(MCC::TransactionCreationId, self.id);
+        modification.insert(MCC::TransactionExpirationId, 0);
 
-        let mut action:BTreeMap<String, u32> = BTreeMap::new();
-        action.insert("delete".to_string(), graph.modifications.len() as u32);
+        let mut action:BTreeMap<MCC, u32> = BTreeMap::new();
+        action.insert(MCC::DeleteElementFromTransaction, graph.modifications.len() as u32);
         self.rollback_actions.insert(action);
         
         graph.modifications.insert(modification.clone());
@@ -189,48 +204,48 @@ impl TransactionId {
     
     fn delete_modification(&mut self, id: u32, graph: &mut Graph) {
         for (i, modification) in graph.modifications.iter().enumerate() {
-            if self.graph_element_visible(graph, modification) && modification.get(&"id".to_string()).unwrap() == &id {
+            if self.graph_element_visible(graph, modification) && modification.get(&MCC::ElementId).unwrap() == &id {
                 if self.graph_element_locked(graph, modification) {
                     panic!("Graph element is locked by another transaction.");
                 } else {
-                    modification.clone().insert("transaction_expiration_id".to_string(), self.id);
-                    let mut new_rec: BTreeMap<String,u32> = BTreeMap::new();
-                    new_rec.insert("add".to_string(), i as u32);
+                    modification.clone().insert(MCC::TransactionExpirationId, self.id);
+                    let mut new_rec: BTreeMap<MCC,u32> = BTreeMap::new();
+                    new_rec.insert(MCC::AddElementToTransaction, i as u32);
                     self.rollback_actions.insert(new_rec);
                 }
             }
         }
     }
     
-    fn graph_element_visible(&self, graph: &Graph, modification: &BTreeMap<String, u32>) -> bool {
-        if graph.active_transaction_ids.contains(modification.get(&"transaction_creation_id".to_string()).unwrap())
-        && modification.get(&"transaction_creation_id".to_string()) != Some(&self.id) {
+    fn graph_element_visible(&self, graph: &Graph, modification: &BTreeMap<MCC, u32>) -> bool {
+        if graph.active_transaction_ids.contains(modification.get(&MCC::TransactionCreationId).unwrap()) 
+        && (modification.get(&MCC::TransactionCreationId) != Some(&self.id)) {
             return false;
         }
     
-        if (modification.get(&"transaction_expiration_id".to_string()) != Some(&0)) 
-        && ((!graph.active_transaction_ids.contains(modification.get(&"transaction_expiration_id".to_string()).unwrap())) 
-        || (modification.get(&"transaction_creation_id".to_string()) == Some(&self.id))) {
+        if (modification.get(&MCC::TransactionExpirationId) != Some(&0)) 
+        && ((!graph.active_transaction_ids.contains(modification.get(&MCC::TransactionExpirationId).unwrap())) 
+        || (modification.get(&MCC::TransactionCreationId) == Some(&self.id))) {
             return false;
         }
-
+ 
         true
     }
     
-    fn graph_element_locked(&self, graph: &Graph, modification: &BTreeMap<String, u32>) -> bool {
-        (modification.get(&"transaction_expiration_id".to_string()).unwrap() != &0) 
+    fn graph_element_locked(&self, graph: &Graph, modification: &BTreeMap<MCC, u32>) -> bool {
+        (modification.get(&MCC::TransactionExpirationId).unwrap() != &0) 
         &&
-        (graph.active_transaction_ids.contains(modification.get(&"transaction_expiration_id".to_string()).unwrap()))
+        (graph.active_transaction_ids.contains(modification.get(&MCC::TransactionExpirationId).unwrap()))
     }
 
     fn update_modification(&mut self, id:u32, num:String, graph: &mut Graph) {
         self.delete_modification(id, graph);
-        let mut new_modification_version: BTreeMap<String,u32> = BTreeMap::new();
-        new_modification_version.insert("id".to_string(), id);
+        let mut new_modification_version: BTreeMap<MCC,u32> = BTreeMap::new();
+        new_modification_version.insert(MCC::ElementId, id);
         self.add_modification(graph, &mut new_modification_version);
     }
 
-    fn create_snapshot(&self, graph: &mut Graph) -> BTreeSet<BTreeMap<String, u32>> {
+    fn create_snapshot(&self, graph: &mut Graph) -> BTreeSet<BTreeMap<MCC, u32>> {
         let mut visible_modifications = BTreeSet::new();
     
         for modification in graph.modifications.iter() {
@@ -249,14 +264,15 @@ impl TransactionId {
     fn rollback(&mut self, g: &mut Graph) {
         for action in self.rollback_actions.iter().rev() {
             let mut map = action.iter();
-
             let item = map.next().unwrap();
             let (action_type, action_position) = item;
+            
+            // TODO: check if it's possible to get out of this clone()
             let pos:u32 = action_position.clone();
             
-            if action_type == &"add".to_string() {                
+            if action_type == &MCC::AddElementToTransaction {                
                 g.set_transaction_expiration(pos, 0);
-            } else if action_type == &"delete".to_string() {
+            } else if action_type == &MCC::DeleteElementFromTransaction {
                  g.set_transaction_expiration(pos, self.id);
             }
         } 
@@ -267,6 +283,8 @@ impl TransactionId {
  
 
 
+////////////////////////////////////////////////////////////////////////////////
+// Unit Tests
 #[cfg(test)]
 mod unit_tests {
     use super::*;
@@ -279,7 +297,7 @@ mod unit_tests {
 
         assert!(graph.nodes.contains_key(&node_id));
     }
-
+    
     #[test]
     fn test_add_edge() {
         let mut graph = Graph::new();
@@ -325,7 +343,7 @@ mod unit_tests {
         let mut tx = graph.start_transaction();
         let node1 = graph.add_node(&tx);
         let mut modification = BTreeMap::new();
-        modification.insert("id".to_string(), 1);
+        modification.insert(MCC::ElementId, 1);
 
         tx.add_modification(&mut graph, &mut modification);
         tx.rollback(&mut graph);
