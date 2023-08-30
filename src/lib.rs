@@ -115,12 +115,19 @@ impl Graph {
     
     // FIX: Error mutating a borrow.
     pub fn set_transaction_expiration(&mut self, pos: u32, n:u32) {
-        self.modifications.iter().skip(pos as usize - 1)
-            .next().to_owned()
-            .unwrap()
-            .insert(MCC::TransactionExpired, n);
-    } 
+        let mut i:u32 = 0;
     
+        for item in &self.modifications {
+            if i == pos {
+                // FIX: not able to borrow because &BTreeMap. 
+                // item.insert(MCC::TransactionExpired, n);
+                todo!();
+                // break;
+            } else {
+                i+=1;
+            }
+        }
+    }    
 }
 
 impl Default for Graph {
@@ -168,7 +175,7 @@ impl<'graph> Iterator for TypePath<'graph> {
 ////////////////////////////////////////////////////////////////////////////////
 // MCC Transaction
 #[derive(Debug, Ord, Eq, PartialEq, PartialOrd, Clone)]
-enum MCC {
+pub enum MCC {
     TransactionCreationId, 
     TransactionExpirationId, 
     TransactionExpired, 
@@ -268,7 +275,7 @@ impl TransactionId {
             let (action_type, action_position) = item;
             
             // TODO: check if it's possible to get out of this clone()
-            let pos:u32 = action_position.clone();
+            let pos:u32 = *action_position;
             
             if action_type == &MCC::AddElementToTransaction {                
                 g.set_transaction_expiration(pos, 0);
